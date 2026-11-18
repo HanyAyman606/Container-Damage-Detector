@@ -5,10 +5,20 @@ class EdgeDetector:
 
     def __init__(self, threshold=50):
         self.threshold = threshold
+        self._image=None
+    
 
-    def _vertical_edges(self, image):
+    @property
+    def image(self):
+        return self._image
+
+    @image.setter
+    def image(self,value):
+        self._image=value
+
+    def _vertical_edges(self):
         # Convert to grayscale
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(self._image, cv2.COLOR_BGR2GRAY)
 
         # Apply Sobel in X direction
         sobel_x = cv2.Sobel(
@@ -22,20 +32,32 @@ class EdgeDetector:
         _, binary_edges = cv2.threshold(
             edges, self.threshold, 255, cv2.THRESH_BINARY
         )
+        #////////////////////////////////////////////////
+        #saving the result of sobel filter for troubleshoot purpose
+        cv2.imwrite("debug/edges.png", binary_edges)
+        #///////////////////////////////////////////////
 
         return binary_edges,gray
 
   
-    def _preprocess_vertical_edges(self, image, min_distance=10):
+    def _preprocess_vertical_edges(self, min_distance=10):
 
-        edges, gray = self._vertical_edges(image)
+        edges, gray = self._vertical_edges()
 
         height, width = edges.shape
+
+        # Close vertical gaps within each column before scoring.
+        # A tall, 1-pixel-wide kernel bridges illumination-caused breaks
+        # inside a real edge column without spreading it left or right.
+        close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, close_kernel)
 
         # Count edge pixels in each column
         column_scores = np.count_nonzero(edges, axis=0)
 
-        edge_threshold = height * 0.5
+        # Lowered from 0.5 to 0.25: after gap-closing, real edge columns
+        # score much higher, so a 25%-of-height bar is sufficient.
+        edge_threshold = height * 0.25
 
         edge_positions = np.where(
             column_scores >= edge_threshold
@@ -50,6 +72,10 @@ class EdgeDetector:
                 grouped_edges.append([x])
             else:
                 grouped_edges[-1].append(x)
+
+        # Discard single-column groups: they are almost always weak
+        # secondary Sobel responses at corrugation shoulders, not true edges.
+        grouped_edges = [g for g in grouped_edges if len(g) >= 2]
 
         # Calculate average X position of each edge
         edge_centers = []
@@ -66,10 +92,10 @@ class EdgeDetector:
 
         return edges, gray, grouped_edges, edge_centers
 
-    def get_vertical_regions(self, image, min_distance=10):
+    def get_vertical_regions(self, min_distance=10):
 
         edges, gray, grouped_edges, edge_centers = \
-            self._preprocess_vertical_edges(image, min_distance)
+            self._preprocess_vertical_edges(min_distance)
 
         height, width = edges.shape
 
@@ -87,11 +113,12 @@ class EdgeDetector:
 
         return regions
 
-    def check_edges_damage(self, image, min_distance=10,
-                       min_height_ratio=0.9, max_deviation=3):
-
+    def check_edges_damage(self, min_distance=10,
+                       min_height_ratio=0.6, max_deviation=3, debug_image=None):
+        if debug_image is None:
+            debug_image=self._image
         edges, _, grouped_edges, _ = \
-            self._preprocess_vertical_edges(image, min_distance)
+            self._preprocess_vertical_edges(min_distance)
 
         height, width = edges.shape
 
@@ -130,36 +157,73 @@ class EdgeDetector:
 
             x_positions = np.array(x_positions)
 
-            # Fit a straight line
+            # Fit a straight line through the edge's average x-positions
             coefficients = np.polyfit(ys, x_positions, 1)
-
             predicted_x = np.polyval(coefficients, ys)
 
-            # Calculate deviation of average edge positions
-            deviations = np.abs(x_positions - predicted_x)
+            # Deviation from the FITTED line measures local wobble,
+            # but a globally tilted or bent edge keeps all residuals small
+            # because polyfit tilts WITH the bend.  Instead, also measure
+            # deviation from a true vertical anchored at the top of the edge
+            # (x = constant = x_positions[0]).  The larger of the two gives
+            # a reliable signal for both local kinks and global bends.
+            vertical_ref  = np.full_like(predicted_x, x_positions[0])
+            deviations    = np.maximum(
+                np.abs(x_positions - predicted_x),   # local wobble
+                np.abs(x_positions - vertical_ref),  # global drift from top
+            )
 
             max_error = np.max(deviations)
 
-            # Count curved pixels
+            # Determine edge condition
+            is_continuous = coverage >= min_height_ratio
+            is_straight = max_error <= max_deviation
+            if not is_continuous:
+                line_color = (255, 0, 255)  # Magenta: short/incomplete edge
+            else:
+                line_color = (0, 255, 0)    # Green: sufficient vertical coverage
+
+            # Draw the predicted reference line first so edge points appear on top
+            p1 = (int(predicted_x[0]), int(ys[0]))
+            p2 = (int(predicted_x[-1]), int(ys[-1]))
+            cv2.line(
+                debug_image,
+                p1,
+                p2,
+                line_color,
+                2
+            )
+
+            # Count curved rows and draw edge points
             curved_pixels = 0
 
             for i, row in enumerate(ys):
 
-                xs = np.where(component[row])[0]
-                actual_xs = np.array(group)[xs]
+                # Use combined deviation (local kink or global drift)
+                row_deviation = deviations[i]
 
-                pixel_deviations = np.abs(
-                    actual_xs - predicted_x[i]
-                )
+                if row_deviation > max_deviation:
+                    curved_pixels += 1   # one damaged row, not one per pixel
 
-                curved_pixels += np.count_nonzero(
-                    pixel_deviations > max_deviation
-                )
+                    # Draw damaged / curved row in yellow
+                    cv2.circle(
+                        debug_image,
+                        (int(x_positions[i]), int(row)),
+                        2,
+                        (0, 255, 255),
+                        -1
+                    )
+                else:
+                    # Draw normal / straight edge row in red
+                    cv2.circle(
+                        debug_image,
+                        (int(x_positions[i]), int(row)),
+                        2,
+                        (0, 0, 255),
+                        -1
+                    )
 
             total_damage += height - len(ys) + curved_pixels
-            # Determine edge condition
-            is_continuous = coverage >= min_height_ratio
-            is_straight = max_error <= max_deviation
 
             results.append({
                 "edge_center": int(np.mean(group)),
@@ -171,6 +235,6 @@ class EdgeDetector:
                 "is_damaged": not (is_continuous and is_straight)
             })
 
-        return results, total_damage  ;''' that's the total damage for one snapshot
+        return results, total_damage, debug_image  ;''' that's the total damage for one snapshot
                                         to be accumulated with the rest of damages in the other snapshots
         '''

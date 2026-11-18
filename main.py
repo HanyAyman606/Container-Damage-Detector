@@ -7,7 +7,9 @@ from core.brightness_calc import BrightnessDetector
 def main():
 
     # 1. Read test image
-    image = cv2.imread("images/test.jpg")
+    image = cv2.imread("test_data/cropped_container2_2.jpg")
+
+    debug_image=image
 
     if image is None:
         raise ValueError("Could not read the test image")
@@ -21,7 +23,8 @@ def main():
     )
 
     # 3. Get vertical regions
-    regions = edge_detector.get_vertical_regions(image)
+    edge_detector.image=image
+    regions = edge_detector.get_vertical_regions()
 
     # 4. Initialize damage counters for this snapshot
     total_anomaly_area = 0
@@ -45,18 +48,36 @@ def main():
         if brightness_detector.Holes_and_Tears():
 
             # Calculate anomaly area
-            anomaly_area = brightness_detector.calculate_damage_area()
+            anomaly_area = brightness_detector.calculate_damage_area(debug_image=debug_image)
 
             total_anomaly_area += anomaly_area
 
         # classify region as Crest or Trough // necessary but later
         classification = brightness_detector.Crest_or_Trough()
+        #//////////////////////////
+        center_x = (start_x + end_x) // 2
+        label = "1" if classification == "Crest" else "0"
+
+        # Measure rendered text width so the label is truly centred
+        # between the two boundary lines regardless of region width.
+        (text_w, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        cv2.putText(
+            debug_image,
+            label,
+            (center_x - text_w // 2, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 0, 0),
+            2
+        )
+
 
         print(f"Region: {region}")
         print(f"Classification: {classification}")
 
     # 6. Check vertical edge damage
-    edge_results, edge_damage = edge_detector.check_edges_damage(image)
+    
+    edge_results, edge_damage, debug_image = edge_detector.check_edges_damage(debug_image=debug_image)
 
     # 7. Add edge damage to the anomaly area
     total_anomaly_area += edge_damage
@@ -78,7 +99,7 @@ def main():
     print(f"Damage percentage: {damage_percentage:.2f}%")
 
     print("\nEdge details:")
-
+    cv2.imwrite('debug/debug_image.png',debug_image)
     for result in edge_results:
         print(result)
 

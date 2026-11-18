@@ -71,32 +71,75 @@ class BrightnessDetector:
         # Check homogeneity
         return std_dev >= self.std_thresh  # if True then there are Tears and Holes
 
-    def calculate_damage_area(self, min_area=10):
+    def calculate_damage_area(self, debug_image=None, min_area=10):
 
         region = self._extract_region()
-        # Apply Gaussian blur to reduce noise
+
         blurred = cv2.GaussianBlur(region, (5, 5), 0)
 
-        # Apply Otsu thresholding
-        _, binary = cv2.threshold(
+        # First Otsu pass: splits histogram into dark vs bright classes
+        otsu_thresh, _ = cv2.threshold(
             blurred, 0, 255,
             cv2.THRESH_BINARY + cv2.THRESH_OTSU
         )
 
-        # Find contours
+        dark_pixels  = blurred[blurred <= otsu_thresh]
+        bright_pixels = blurred[blurred > otsu_thresh]
+
+        if len(dark_pixels) > len(bright_pixels):
+            # Trimodal case (hole + wall + text/stickers).
+            # A single Otsu threshold lumps the wall and hole together so the
+            # contour brightness test always fails.  Apply a second Otsu on
+            # just the dark half to isolate the hole from the wall.
+            hole_thresh, _ = cv2.threshold(
+                dark_pixels, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )
+            wall_band = blurred[(blurred > hole_thresh) & (blurred <= otsu_thresh)]
+            majority_brightness = np.mean(wall_band) if wall_band.size > 0 \
+                                   else np.mean(dark_pixels)
+            # Binary mask: pixels at or below the hole sub-threshold are "dark"
+            binary = (blurred <= hole_thresh).astype(np.uint8) * 255
+        else:
+            # Bimodal case (wall vs hole) — single Otsu is sufficient
+            majority_brightness = np.mean(bright_pixels)
+            binary = (blurred <= otsu_thresh).astype(np.uint8) * 255
+
         contours, _ = cv2.findContours(
             binary,
             cv2.RETR_EXTERNAL,
             cv2.CHAIN_APPROX_SIMPLE
         )
 
-        # Calculate total anomaly area
         anomaly_area = 0
+        start_x, _ = self.bounds
 
         for contour in contours:
+
             area = cv2.contourArea(contour)
 
-            if area >= min_area:
+            if area < min_area:
+                continue
+
+            mask = np.zeros(region.shape, dtype=np.uint8)
+
+            cv2.drawContours(
+                mask, [contour], -1, 255, cv2.FILLED
+            )
+
+            contour_brightness = cv2.mean(region, mask=mask)[0]
+
+            if contour_brightness < majority_brightness:
+
                 anomaly_area += area
+
+                if debug_image is not None:
+                    cv2.drawContours(
+                        debug_image,
+                        [contour],
+                        -1,
+                        (255, 255, 0),
+                        2,
+                        offset=(start_x, 0)
+                    )
 
         return anomaly_area
