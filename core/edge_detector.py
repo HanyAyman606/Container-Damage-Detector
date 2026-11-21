@@ -1,22 +1,28 @@
 import cv2
 import numpy as np
 
+
 class EdgeDetector:
 
-    def __init__(self, threshold=50,min_distance=10,min_num_of_coloumns=2,ksize=3):
+    def __init__(self, threshold=50, min_distance=10, min_num_of_coloumns=2, ksize=3,
+                 column_ratio=0.25, close_height=25, save_debug=False):
         self.threshold = threshold
-        self._image=None
-        self.min_distance=min_distance
-        # minimum distance between 2 edges 
-        self.min_num_of_coloumns=min_num_of_coloumns
-        self.ksize=ksize
+        self._image = None
+        self.min_distance = min_distance
+        # minimum distance between 2 edges
+        self.min_num_of_coloumns = min_num_of_coloumns
+        self.ksize = ksize
+        self.column_ratio = column_ratio    # fraction of image height a column needs in edge pixels
+        self.close_height = close_height    # height of the vertical closing kernel (odd)
+        self.save_debug = save_debug        # write debug/edges.png (keep False for GUI / timing)
+
     @property
     def image(self):
         return self._image
 
     @image.setter
-    def image(self,value):
-        self._image=value
+    def image(self, value):
+        self._image = value
 
     def _vertical_edges(self):
         # Convert to grayscale
@@ -34,14 +40,13 @@ class EdgeDetector:
         _, binary_edges = cv2.threshold(
             edges, self.threshold, 255, cv2.THRESH_BINARY
         )
-        #////////////////////////////////////////////////
-        #saving the result of sobel filter for troubleshoot purpose
-        cv2.imwrite("debug/edges.png", binary_edges)
-        #///////////////////////////////////////////////
 
-        return binary_edges,gray
+        # Save the Sobel result for troubleshooting (off by default)
+        if self.save_debug:
+            cv2.imwrite("debug/edges.png", binary_edges)
 
-  
+        return binary_edges, gray
+
     def _preprocess_vertical_edges(self):
 
         edges, gray = self._vertical_edges()
@@ -51,15 +56,14 @@ class EdgeDetector:
         # Close vertical gaps within each column before scoring.
         # A tall, 1-pixel-wide kernel bridges illumination-caused breaks
         # inside a real edge column without spreading it left or right.
-        close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
-        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, close_kernel)  
-        #MORPH_CLOSE: DILATE then EROSION to fill gaps and then restore the original thickness
+        close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, self.close_height))
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, close_kernel)
+        # MORPH_CLOSE: DILATE then ERODE to fill gaps and restore the original thickness
 
         # Count edge pixels in each column
         column_scores = np.count_nonzero(edges, axis=0)
 
-        # Lowered from 0.5 to 0.25
-        edge_threshold = height * 0.25
+        edge_threshold = height * self.column_ratio
 
         edge_positions = np.where(
             column_scores >= edge_threshold
@@ -116,9 +120,9 @@ class EdgeDetector:
         return regions
 
     def check_edges_damage(self,
-                       min_height_ratio=0.6, max_deviation=3, debug_image=None):
+                           min_height_ratio=0.6, max_deviation=3, debug_image=None):
         if debug_image is None:
-            debug_image=self._image
+            debug_image = self._image
         edges, _, grouped_edges, _ = \
             self._preprocess_vertical_edges()
 
@@ -139,9 +143,6 @@ class EdgeDetector:
             # Calculate vertical coverage
             coverage = len(ys) / height
 
-            
-            
-
             # Calculate average X position in each row
             x_positions = []
 
@@ -160,12 +161,12 @@ class EdgeDetector:
 
             # Deviation from the FITTED line measures local wobble,
             # but a globally tilted or bent edge keeps all residuals small
-            # because polyfit tilts WITH the bend.  Instead, also measure
+            # because polyfit tilts WITH the bend. So also measure
             # deviation from a true vertical anchored at the top of the edge
-            # (x = constant = x_positions[0]).  The larger of the two gives
+            # (x = constant = x_positions[0]). The larger of the two gives
             # a reliable signal for both local kinks and global bends.
-            vertical_ref  = np.full_like(predicted_x, x_positions[0])
-            deviations    = np.maximum(
+            vertical_ref = np.full_like(predicted_x, x_positions[0])
+            deviations = np.maximum(
                 np.abs(x_positions - predicted_x),   # local wobble
                 np.abs(x_positions - vertical_ref),  # global drift from top
             )
@@ -232,6 +233,6 @@ class EdgeDetector:
                 "is_damaged": not (is_continuous and is_straight)
             })
 
-        return results, total_damage, debug_image  ;''' that's the total damage for one snapshot
-                                        to be accumulated with the rest of damages in the other snapshots
-        '''
+        # Total damage for one snapshot, to be accumulated with the
+        # damage from the other snapshots
+        return results, total_damage, debug_image
