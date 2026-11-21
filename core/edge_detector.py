@@ -3,11 +3,13 @@ import numpy as np
 
 class EdgeDetector:
 
-    def __init__(self, threshold=50):
+    def __init__(self, threshold=50,min_distance=10,min_num_of_coloumns=2,ksize=3):
         self.threshold = threshold
         self._image=None
-    
-
+        self.min_distance=min_distance
+        # minimum distance between 2 edges 
+        self.min_num_of_coloumns=min_num_of_coloumns
+        self.ksize=ksize
     @property
     def image(self):
         return self._image
@@ -22,7 +24,7 @@ class EdgeDetector:
 
         # Apply Sobel in X direction
         sobel_x = cv2.Sobel(
-            gray, cv2.CV_64F, 1, 0, ksize=3
+            gray, cv2.CV_64F, 1, 0, ksize=self.ksize
         )
 
         # Convert to absolute values
@@ -40,7 +42,7 @@ class EdgeDetector:
         return binary_edges,gray
 
   
-    def _preprocess_vertical_edges(self, min_distance=10):
+    def _preprocess_vertical_edges(self):
 
         edges, gray = self._vertical_edges()
 
@@ -50,13 +52,13 @@ class EdgeDetector:
         # A tall, 1-pixel-wide kernel bridges illumination-caused breaks
         # inside a real edge column without spreading it left or right.
         close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
-        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, close_kernel)
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, close_kernel)  
+        #MORPH_CLOSE: DILATE then EROSION to fill gaps and then restore the original thickness
 
         # Count edge pixels in each column
         column_scores = np.count_nonzero(edges, axis=0)
 
-        # Lowered from 0.5 to 0.25: after gap-closing, real edge columns
-        # score much higher, so a 25%-of-height bar is sufficient.
+        # Lowered from 0.5 to 0.25
         edge_threshold = height * 0.25
 
         edge_positions = np.where(
@@ -68,14 +70,14 @@ class EdgeDetector:
 
         for x in edge_positions:
 
-            if not grouped_edges or x - grouped_edges[-1][-1] > min_distance:
+            if not grouped_edges or x - grouped_edges[-1][-1] > self.min_distance:
                 grouped_edges.append([x])
             else:
                 grouped_edges[-1].append(x)
 
         # Discard single-column groups: they are almost always weak
         # secondary Sobel responses at corrugation shoulders, not true edges.
-        grouped_edges = [g for g in grouped_edges if len(g) >= 2]
+        grouped_edges = [g for g in grouped_edges if len(g) >= self.min_num_of_coloumns]
 
         # Calculate average X position of each edge
         edge_centers = []
@@ -92,10 +94,10 @@ class EdgeDetector:
 
         return edges, gray, grouped_edges, edge_centers
 
-    def get_vertical_regions(self, min_distance=10):
+    def get_vertical_regions(self):
 
         edges, gray, grouped_edges, edge_centers = \
-            self._preprocess_vertical_edges(min_distance)
+            self._preprocess_vertical_edges()
 
         height, width = edges.shape
 
@@ -113,19 +115,18 @@ class EdgeDetector:
 
         return regions
 
-    def check_edges_damage(self, min_distance=10,
+    def check_edges_damage(self,
                        min_height_ratio=0.6, max_deviation=3, debug_image=None):
         if debug_image is None:
             debug_image=self._image
         edges, _, grouped_edges, _ = \
-            self._preprocess_vertical_edges(min_distance)
+            self._preprocess_vertical_edges()
 
         height, width = edges.shape
 
         results = []
 
         total_damage = 0
-        total_curved_pixels = 0
 
         for group in grouped_edges:
 
@@ -140,10 +141,6 @@ class EdgeDetector:
 
             
             
-
-            # Skip line fitting if there are insufficient points
-            if len(ys) < 2:
-                continue
 
             # Calculate average X position in each row
             x_positions = []

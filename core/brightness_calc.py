@@ -3,12 +3,11 @@ import numpy as np
 
 class BrightnessDetector:
 
-    def __init__(self,thresh,std_thresh):
+    def __init__(self,min_area=10,blur_kernel=(5,5)):
         self._image=None
-        self.thresh=thresh
         self._bounds=None
-        self.std_thresh=std_thresh
-
+        self.min_area=min_area  # min area to accept as contour
+        self.blur_kernel=blur_kernel
 
     @property
     def image(self):
@@ -25,23 +24,21 @@ class BrightnessDetector:
     @bounds.setter
     def bounds(self, value):
         self._bounds=value
-        self.start_x=value[0]
-        self.end_x=value[1]
         
 
 
     def _extract_region(self):
 
-        if self.image is None:
+        if self._image is None:
             raise ValueError("No image has been assigned")
 
-        if self.bounds is None:
+        if self._bounds is None:
             raise ValueError("No region bounds have been assigned")
 
         if self.image.ndim == 3:
             gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
         else:
-            gray = self.image
+            gray = self._image
 
         _, width = gray.shape
 
@@ -55,30 +52,15 @@ class BrightnessDetector:
         return image_region
 
 
-    def Crest_or_Trough(self):
-
-        region = self._extract_region()
-        brightness = np.mean(region)
-        return 'Crest' if brightness > self.thresh else 'Trough'
-
-
-    def Holes_and_Tears(self):  # By testing homogeneity 
-
-        region = self._extract_region()
-        # Calculate brightness standard deviation
-        std_dev = np.std(region)
-
-        # Check homogeneity
-        return std_dev >= self.std_thresh  # if True then there are Tears and Holes
-
-    def calculate_damage_area(self, debug_image=None, min_area=10):
-
+    def calculate_damage_area(self, debug_image=None):
+        if debug_image is None:
+            debug_image=self._image
         region = self._extract_region()
 
-        blurred = cv2.GaussianBlur(region, (5, 5), 0)
+        blurred = cv2.GaussianBlur(region, self.blur_kernel, 0)
 
         # First Otsu pass: splits histogram into dark vs bright classes
-        otsu_thresh, _ = cv2.threshold(
+        otsu_thresh, binary_image = cv2.threshold(
             blurred, 0, 255,
             cv2.THRESH_BINARY + cv2.THRESH_OTSU
         )
@@ -117,7 +99,7 @@ class BrightnessDetector:
 
             area = cv2.contourArea(contour)
 
-            if area < min_area:
+            if area < self.min_area:
                 continue
 
             mask = np.zeros(region.shape, dtype=np.uint8)
@@ -132,14 +114,14 @@ class BrightnessDetector:
 
                 anomaly_area += area
 
-                if debug_image is not None:
-                    cv2.drawContours(
-                        debug_image,
-                        [contour],
-                        -1,
-                        (255, 255, 0),
-                        2,
-                        offset=(start_x, 0)
-                    )
+                
+                cv2.drawContours(
+                    debug_image,
+                    [contour],
+                    -1,
+                    (255, 255, 0),
+                    2,
+                    offset=(start_x, 0)
+                )
 
-        return anomaly_area
+        return anomaly_area, majority_brightness
