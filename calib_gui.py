@@ -32,8 +32,9 @@ def run_pipeline(image, ed, bd, min_height_ratio, max_deviation):
         s, e = region
         total_area += image.shape[0] * (e - s)
 
-        # calculate_damage_area returns (anomaly_area, majority_brightness)
-        anomaly_area, majority_brightness = bd.calculate_damage_area(debug_image=debug)
+        # calculate_damage_area returns (anomaly_area, majority_brightness, debug_image)
+        # debug_image is the same object we passed in (modified in-place); discard the third value
+        anomaly_area, majority_brightness, _ = bd.calculate_damage_area(debug_image=debug)
         region_brightness.append(majority_brightness)
         total_anomaly += anomaly_area
 
