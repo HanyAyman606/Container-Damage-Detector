@@ -42,7 +42,7 @@ class BrightnessDetector:
 
         _, width = gray.shape
 
-        start_x, end_x = self.bounds
+        start_x, end_x = self._bounds
 
         if start_x < 0 or end_x > width or start_x >= end_x:
             raise ValueError("Invalid X positions")
@@ -93,7 +93,6 @@ class BrightnessDetector:
         )
 
         anomaly_area = 0
-        start_x, _ = self.bounds
 
         for contour in contours:
 
@@ -113,7 +112,7 @@ class BrightnessDetector:
             if contour_brightness < majority_brightness:
 
                 anomaly_area += area
-
+                start_x,_=self._bounds
                 
                 cv2.drawContours(
                     debug_image,
@@ -124,4 +123,4 @@ class BrightnessDetector:
                     offset=(start_x, 0)
                 )
 
-        return anomaly_area, majority_brightness
+        return anomaly_area, majority_brightness, debug_image

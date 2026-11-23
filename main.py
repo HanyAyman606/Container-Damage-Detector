@@ -1,141 +1,85 @@
-import cv2
-import numpy as np
-import time
+import cv2 as cv
+import sys
 
 from core.edge_detector import EdgeDetector
 from core.brightness_calc import BrightnessDetector
 
+video_path = sys.argv[1] if len(sys.argv) > 1 else 0
+
+flag=True
 
 def main():
-    start_time = time.perf_counter()
-    # 1. Read test image
-    image = cv2.imread("test_data/cropped_container2_2.jpg")
+    cap=cv.VideoCapture(video_path)
+    if not cap.isOpened():
+        print("Error: Could not open video.")
+        exit()
 
-    if image is None:
-        raise ValueError("Could not read the test image")
+    while True:
+        ret,frame=cap.read()
+        if not ret:
+            print("End of video or cannot read frame.")
+            break
 
-    debug_image = image.copy()
+        edge_obj=EdgeDetector()
+        bright_obj=BrightnessDetector()
+        edge_obj.image=frame
+        bright_obj.image=frame
 
-    # 2. Create detector instances
-    edge_detector = EdgeDetector(threshold=50)
+        total_container_dmg=0
+        total_area=0
 
-    brightness_detector = BrightnessDetector()
+        if flag:
+            snap_dmg=pipeline(edge_obj,bright_obj)
+            total_container_dmg+=snap_dmg
+            h,w,_=frame.shape
+            total_area+=w*h
+    
 
-    # 3. Get vertical regions
-    edge_detector.image = image
-    regions = edge_detector.get_vertical_regions()
+def pipeline(edge_obj,bright_obj):
+    regions=edge_obj.get_vertical_regions()
+    results,edges_damage,debug_img=edge_obj.check_edges_damage()
+    total_anomaly_area=0
+    max_region_brightness=0
+    index_max=0
+    for index,region in enumerate(regions):
+        bright_obj.bounds=region
 
-    # 4. Initialize damage counters for this snapshot
-    total_anomaly_area = 0
-    total_snapshot_area = 0
-
-    # Store the brightness reference for every region
-    region_brightness = []
-
-    # 5. Process each region
-    brightness_detector.image = image
-
-    for region in regions:
-
-        # Assign region boundaries
-        brightness_detector.bounds = region
-
-        # Calculate region area
-        start_x, end_x = region
-        region_area = image.shape[0] * (end_x - start_x)
-
-        total_snapshot_area += region_area
-
-        # Calculate anomaly area and majority brightness
-        anomaly_area, majority_brightness = (
-            brightness_detector.calculate_damage_area(
-                debug_image=debug_image
-            )
+        anomaly_area, majority_brightness, debug_img = bright_obj.calculate_damage_area(debug_img)
+        total_anomaly_area+=anomaly_area
+        if majority_brightness>max_region_brightness:
+            max_region_brightness= majority_brightness
+            index_max=index
+    Crest_or_Trough=[]
+    for i,region in enumerate(regions):
+        if (i-index_max)%2==0:
+            classification='1'
+        else:
+            classification='0'
+        Crest_or_Trough.append(classification)
+        
+        (text_w, _), _ = cv.getTextSize(
+            classification,
+            cv.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            2
+        )
+        start_x,end_x=region
+        center_x=(end_x-start_x)//2
+        cv.putText(
+            debug_img,
+            classification,
+            (center_x - text_w // 2, 30),
+            cv.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 0, 0),
+            2
         )
 
-        region_brightness.append(majority_brightness)
-        
-        total_anomaly_area += anomaly_area
 
-        print(f"Region: {region}")
-        print(f"Majority brightness: {majority_brightness:.2f}")
+    total_img_damage=edges_damage + anomaly_area
+    print(f"edges data:\n{results}\nimage damage= {total_img_damage}\n")
+    #cv.imwrite("debug_image",debug_img)
+    return total_img_damage
 
-    # 6. Classify regions using the brightest region as the Crest reference
-    if region_brightness:
-
-        crest_index = int(np.argmax(region_brightness))
-
-        print(f"\nCrest reference region: {regions[crest_index]}")
-
-        for i, region in enumerate(regions):
-
-            if (i - crest_index) % 2 == 0:
-                classification = "Crest"
-            else:
-                classification = "Trough"
-
-            # Draw classification label
-            start_x, end_x = region
-            center_x = (start_x + end_x) // 2
-
-            label = "1" if classification == "Crest" else "0"
-
-            (text_w, _), _ = cv2.getTextSize(
-                label,
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                2
-            )
-
-            cv2.putText(
-                debug_image,
-                label,
-                (center_x - text_w // 2, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 0, 0),
-                2
-            )
-
-            print(f"Region: {region}")
-            print(f"Classification: {classification}")
-
-    # 7. Check vertical edge damage
-    edge_results, edge_damage, debug_image = (
-        edge_detector.check_edges_damage(debug_image=debug_image)
-    )
-
-    # 8. Add edge damage to the anomaly area
-    total_anomaly_area += edge_damage
-
-    # 9. Calculate snapshot damage percentage
-    damage_percentage = (
-        (total_anomaly_area / total_snapshot_area) * 100
-        if total_snapshot_area > 0 else 0
-    )
-
-    # 10. Display results
-    print("\n========== SNAPSHOT RESULTS ==========")
-
-    print(f"Number of regions: {len(regions)}")
-    print(f"Total snapshot area: {total_snapshot_area} pixels")
-    print(f"Brightness anomaly area: {total_anomaly_area - edge_damage} pixels")
-    print(f"Edge damage: {edge_damage} pixels")
-    print(f"Total damaged area: {total_anomaly_area} pixels")
-    print(f"Damage percentage: {damage_percentage:.2f}%")
-
-    print("\nEdge details:")
-    for result in edge_results:
-        print(result)
-
-    # Save debug image
-    cv2.imwrite("debug/debug_image1.png", debug_image)
-
-    end_time = time.perf_counter()
-
-    execution_time = end_time - start_time
-
-    print(f"\nTotal execution time: {execution_time:.4f} seconds")
-    print(f"FPS: {1 / execution_time:.2f}")
 if __name__ == "__main__":
     main()

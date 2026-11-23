@@ -8,8 +8,7 @@ class EdgeDetector:
                  column_ratio=0.25, close_height=25, save_debug=False):
         self.threshold = threshold
         self._image = None
-        self.min_distance = min_distance
-        # minimum distance between 2 edges
+        self.min_distance = min_distance    # minimum distance between 2 edges
         self.min_num_of_coloumns = min_num_of_coloumns
         self.ksize = ksize
         self.column_ratio = column_ratio    # fraction of image height a column needs in edge pixels
