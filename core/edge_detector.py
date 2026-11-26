@@ -104,7 +104,19 @@ class EdgeDetector:
 
         height, width = edges.shape
 
-        boundaries = [0] + edge_centers + [width]
+        boundaries = list(edge_centers)
+
+        # Add the left image border only if the first edge is far enough from it
+        if not boundaries or boundaries[0] - 0 > self.min_distance:
+            boundaries.insert(0, 0)
+
+        # Add the right image border only if the last edge is far enough from it
+        if width - boundaries[-1] > self.min_distance:
+            boundaries.append(width)
+
+        # Image too narrow / no usable boundaries: fall back to a single region
+        if len(boundaries) < 2:
+            return [(0, width)]
 
         regions = []
 
